@@ -4,6 +4,7 @@ import torch
 from torchvision import transforms
 import numpy as np
 from PIL import Image
+import matplotlib.pyplot as plt
 
 
 def imresize(im, size, interp='bilinear'):
@@ -52,14 +53,20 @@ class BaseDataset(torch.utils.data.Dataset):
 
     def img_transform(self, img):
         # 0-255 to 0-1
-        img = np.float32(np.array(img)) / 255.
-        img = img.transpose((2, 0, 1))
+        img = np.float32(np.array(img)) / 255.      # 
+        img = img.transpose((2, 0, 1))              # 
         img = self.normalize(torch.from_numpy(img.copy()))
         return img
 
     def segm_transform(self, segm):
         # to tensor, -1 to 149
         segm = torch.from_numpy(np.array(segm)).long() - 1
+        return segm
+
+    def person_transform(self, segm):
+        segm = np.array(segm)
+        segm[segm > 1] = 0                          # 标注有2
+        segm = torch.from_numpy(segm)
         return segm
 
     # Round x to the nearest multiple of p and x' >= x
@@ -138,8 +145,8 @@ class TrainDataset(BaseDataset):
         # Here we must pad both input image and segmentation map to size h' and w' so that p | h' and p | w'
         batch_width = np.max(batch_widths)
         batch_height = np.max(batch_heights)
-        batch_width = int(self.round2nearest_multiple(batch_width, self.padding_constant))
-        batch_height = int(self.round2nearest_multiple(batch_height, self.padding_constant))
+        batch_width = int(self.round2nearest_multiple(batch_width, self.padding_constant))          # 能被8整除
+        batch_height = int(self.round2nearest_multiple(batch_height, self.padding_constant))        
 
         assert self.padding_constant >= self.segm_downsampling_rate, \
             'padding constant must be equal or large than segm downsamping rate'
@@ -169,11 +176,11 @@ class TrainDataset(BaseDataset):
                 segm = segm.transpose(Image.FLIP_LEFT_RIGHT)
 
             # note that each sample within a mini batch has different scale param
-            img = imresize(img, (batch_widths[i], batch_heights[i]), interp='bilinear')
+            img = imresize(img, (batch_widths[i], batch_heights[i]), interp='bilinear')         # 训练图片的尺寸的resize
             segm = imresize(segm, (batch_widths[i], batch_heights[i]), interp='nearest')
 
             # further downsample seg label, need to avoid seg label misalignment
-            segm_rounded_width = self.round2nearest_multiple(segm.size[0], self.segm_downsampling_rate)
+            segm_rounded_width = self.round2nearest_multiple(segm.size[0], self.segm_downsampling_rate)     # 对分割图的宽度
             segm_rounded_height = self.round2nearest_multiple(segm.size[1], self.segm_downsampling_rate)
             segm_rounded = Image.new('L', (segm_rounded_width, segm_rounded_height), 0)
             segm_rounded.paste(segm, (0, 0))
@@ -183,11 +190,19 @@ class TrainDataset(BaseDataset):
                  segm_rounded.size[1] // self.segm_downsampling_rate), \
                 interp='nearest')
 
+            # plt.subplot(1, 2, 1)
+            # plt.imshow(img)
+            # plt.subplot(1, 2, 2)
+            # plt.imshow(segm)
+            # plt.show()
+
             # image transform, to torch float tensor 3xHxW
+            # 图像预处理
             img = self.img_transform(img)
 
             # segm transform, to torch long tensor HxW
-            segm = self.segm_transform(segm)
+            # segm = self.segm_transform(segm)
+            segm = self.person_transform(segm)
 
             # put into batch arrays
             batch_images[i][:, :img.shape[1], :img.shape[2]] = img

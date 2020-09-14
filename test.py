@@ -18,7 +18,8 @@ from PIL import Image
 from tqdm import tqdm
 from mit_semseg.config import cfg
 
-colors = loadmat('data/color150.mat')['colors']
+# colors = loadmat('data/color150.mat')['colors']
+colors = loadmat('data/Person/person_color.mat')['colors']
 names = {}
 with open('data/object150_info.csv') as f:
     reader = csv.reader(f)
@@ -45,11 +46,13 @@ def visualize_result(data, pred, cfg):
     pred_color = colorEncode(pred, colors).astype(np.uint8)
 
     # aggregate images and save
-    im_vis = np.concatenate((img, pred_color), axis=1)
+    # im_vis = np.concatenate((img, pred_color), axis=1)
+    im_vis = img * 0.5 + pred_color * 0.5
+    im_vis = im_vis.astype(np.uint8)
 
     img_name = info.split('/')[-1]
     Image.fromarray(im_vis).save(
-        os.path.join(cfg.TEST.result, img_name.replace('.jpg', '.png')))
+        os.path.join(cfg.TEST.result, img_name))
 
 
 def test(segmentation_module, loader, gpu):
@@ -75,8 +78,8 @@ def test(segmentation_module, loader, gpu):
                 feed_dict = async_copy_to(feed_dict, gpu)
 
                 # forward pass
-                pred_tmp = segmentation_module(feed_dict, segSize=segSize)
-                scores = scores + pred_tmp / len(cfg.DATASET.imgSizes)
+                pred_tmp = segmentation_module(feed_dict, segSize=segSize)          # 给定segSize，然后直接上采样到规定尺寸
+                scores = scores + pred_tmp / len(cfg.DATASET.imgSizes)              # 多尺度测试
 
             _, pred = torch.max(scores, dim=1)
             pred = as_numpy(pred.squeeze(0).cpu())
@@ -139,13 +142,13 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         "--imgs",
-        required=True,
+        default="output/image",
         type=str,
-        help="an image path, or a directory name"
+        help="an image path, or a directory name",
     )
     parser.add_argument(
         "--cfg",
-        default="config/ade20k-resnet50dilated-ppm_deepsup.yaml",
+        default="config/person-resnet50dilated-ppm_deepsup.yaml",
         metavar="FILE",
         help="path to config file",
         type=str,
@@ -159,7 +162,7 @@ if __name__ == '__main__':
     parser.add_argument(
         "opts",
         help="Modify config options using the command-line",
-        default=None,
+        default="TEST.result ./ TEST.checkpoint epoch_20.pth",
         nargs=argparse.REMAINDER,
     )
     args = parser.parse_args()

@@ -27,6 +27,15 @@ class SegmentationModule(SegmentationModuleBase):
         self.deep_sup_scale = deep_sup_scale
 
     def forward(self, feed_dict, *, segSize=None):
+        # raise a TypeError while trying to access it as a dictionary.
+        if type(feed_dict) is list:
+            feed_dict = feed_dict[0]
+            # also, convert to torch.cuda.FloatTensor
+            if torch.cuda.is_available():
+                feed_dict['img_data'] = feed_dict['img_data'].cuda()
+                feed_dict['seg_label'] = feed_dict['seg_label'].cuda()
+            else:
+                raise RunTimeError('Cannot convert torch.Floattensor into torch.cuda.FloatTensor')
         # training
         if segSize is None:
             if self.deep_sup_scale is not None: # use deep supervision technique
@@ -34,7 +43,7 @@ class SegmentationModule(SegmentationModuleBase):
             else:
                 pred = self.decoder(self.encoder(feed_dict['img_data'], return_feature_maps=True))
 
-            loss = self.crit(pred, feed_dict['seg_label'])
+            loss = self.crit(pred, feed_dict['seg_label'])      # 网络输出b,classes,w,h    target:b,w,h
             if self.deep_sup_scale is not None:
                 loss_deepsup = self.crit(pred_deepsup, feed_dict['seg_label'])
                 loss = loss + loss_deepsup * self.deep_sup_scale
@@ -468,16 +477,16 @@ class PPMDeepsup(nn.Module):
 
         input_size = conv5.size()
         ppm_out = [conv5]
-        for pool_scale in self.ppm:
+        for pool_scale in self.ppm:                     # 不同尺度的池化，在resize到 1/8
             ppm_out.append(nn.functional.interpolate(
                 pool_scale(conv5),
                 (input_size[2], input_size[3]),
                 mode='bilinear', align_corners=False))
         ppm_out = torch.cat(ppm_out, 1)
 
-        x = self.conv_last(ppm_out)
+        x = self.conv_last(ppm_out)             # 1/8原图
 
-        if self.use_softmax:  # is True during inference
+        if self.use_softmax:  # is True during inference    # 测试时直接重建到原图尺寸 再求softmax
             x = nn.functional.interpolate(
                 x, size=segSize, mode='bilinear', align_corners=False)
             x = nn.functional.softmax(x, dim=1)

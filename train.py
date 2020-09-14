@@ -12,7 +12,7 @@ import torch.nn as nn
 from mit_semseg.config import cfg
 from mit_semseg.dataset import TrainDataset
 from mit_semseg.models import ModelBuilder, SegmentationModule
-from mit_semseg.utils import AverageMeter, parse_devices, setup_logger
+from mit_semseg.utils import AverageMeter, parse_devices, setup_logger, checkpoint, group_weight, create_optimizers, adjust_learning_rate
 from mit_semseg.lib.nn import UserScatteredDataParallel, user_scattered_collate, patch_replication_callback
 
 
@@ -71,74 +71,6 @@ def train(segmentation_module, iterator, optimizers, history, epoch, cfg):
             history['train']['acc'].append(acc.data.item())
 
 
-def checkpoint(nets, history, cfg, epoch):
-    print('Saving checkpoints...')
-    (net_encoder, net_decoder, crit) = nets
-
-    dict_encoder = net_encoder.state_dict()
-    dict_decoder = net_decoder.state_dict()
-
-    torch.save(
-        history,
-        '{}/history_epoch_{}.pth'.format(cfg.DIR, epoch))
-    torch.save(
-        dict_encoder,
-        '{}/encoder_epoch_{}.pth'.format(cfg.DIR, epoch))
-    torch.save(
-        dict_decoder,
-        '{}/decoder_epoch_{}.pth'.format(cfg.DIR, epoch))
-
-
-def group_weight(module):
-    group_decay = []
-    group_no_decay = []
-    for m in module.modules():
-        if isinstance(m, nn.Linear):
-            group_decay.append(m.weight)
-            if m.bias is not None:
-                group_no_decay.append(m.bias)
-        elif isinstance(m, nn.modules.conv._ConvNd):
-            group_decay.append(m.weight)
-            if m.bias is not None:
-                group_no_decay.append(m.bias)
-        elif isinstance(m, nn.modules.batchnorm._BatchNorm):
-            if m.weight is not None:
-                group_no_decay.append(m.weight)
-            if m.bias is not None:
-                group_no_decay.append(m.bias)
-
-    assert len(list(module.parameters())) == len(group_decay) + len(group_no_decay)
-    groups = [dict(params=group_decay), dict(params=group_no_decay, weight_decay=.0)]
-    return groups
-
-
-def create_optimizers(nets, cfg):
-    (net_encoder, net_decoder, crit) = nets
-    optimizer_encoder = torch.optim.SGD(
-        group_weight(net_encoder),
-        lr=cfg.TRAIN.lr_encoder,
-        momentum=cfg.TRAIN.beta1,
-        weight_decay=cfg.TRAIN.weight_decay)
-    optimizer_decoder = torch.optim.SGD(
-        group_weight(net_decoder),
-        lr=cfg.TRAIN.lr_decoder,
-        momentum=cfg.TRAIN.beta1,
-        weight_decay=cfg.TRAIN.weight_decay)
-    return (optimizer_encoder, optimizer_decoder)
-
-
-def adjust_learning_rate(optimizers, cur_iter, cfg):
-    scale_running_lr = ((1. - float(cur_iter) / cfg.TRAIN.max_iters) ** cfg.TRAIN.lr_pow)
-    cfg.TRAIN.running_lr_encoder = cfg.TRAIN.lr_encoder * scale_running_lr
-    cfg.TRAIN.running_lr_decoder = cfg.TRAIN.lr_decoder * scale_running_lr
-
-    (optimizer_encoder, optimizer_decoder) = optimizers
-    for param_group in optimizer_encoder.param_groups:
-        param_group['lr'] = cfg.TRAIN.running_lr_encoder
-    for param_group in optimizer_decoder.param_groups:
-        param_group['lr'] = cfg.TRAIN.running_lr_decoder
-
-
 def main(cfg, gpus):
     # Network Builders
     net_encoder = ModelBuilder.build_encoder(
@@ -151,7 +83,7 @@ def main(cfg, gpus):
         num_class=cfg.DATASET.num_class,
         weights=cfg.MODEL.weights_decoder)
 
-    crit = nn.NLLLoss(ignore_index=-1)
+    crit = nn.NLLLoss(ignore_index=-1)              # 整个就是cross_entropy
 
     if cfg.MODEL.arch_decoder.endswith('deepsup'):
         segmentation_module = SegmentationModule(
@@ -214,14 +146,14 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         "--cfg",
-        default="config/ade20k-resnet50dilated-ppm_deepsup.yaml",
+        default="config/person-resnet50dilated-ppm_deepsup.yaml",
         metavar="FILE",
         help="path to config file",
         type=str,
     )
     parser.add_argument(
         "--gpus",
-        default="0-3",
+        default="0",
         help="gpus to use, e.g. 0-3 or 0,1,2,3"
     )
     parser.add_argument(
